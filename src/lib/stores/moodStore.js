@@ -1,43 +1,69 @@
-import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { writable } from 'svelte/store';
+import { collection, addDoc, query, where, orderBy, onSnapshot, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from '../../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
+// The moods store containing the array of mood entries for the logged-in user
+export const moods = writable([]);
 
+let unsubscribe = null;
 
+// Automatically manage subscription to the user's mood collection based on auth state
+onAuthStateChanged(auth, (user) => {
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
+  }
+
+  if (user) {
+    const q = query(
+      collection(db, 'moods'),
+      where('uid', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
+
+    unsubscribe = onSnapshot(q, (snapshot) => {
+      const moodList = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          mood: data.mood,
+          note: data.note,
+          // Handle serverTimestamp which is null/undefined during offline persistence / local cache latency
+          timestamp: data.createdAt ? data.createdAt.toDate() : new Date(),
+          ...data
+        };
+      });
+      moods.set(moodList);
+    }, (error) => {
+      console.error("Firestore onSnapshot error:", error);
+    });
+  } else {
+    moods.set([]);
+  }
+});
+
+// ✅ Add mood to Firestore
 export async function addMood(mood, note) {
-  const user = auth.currentUser
-  if (!user) throw new Error('Not signed in')
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not signed in');
 
   return addDoc(collection(db, 'moods'), {
     uid: user.uid,
     mood,
     note,
     createdAt: serverTimestamp()
-  })
+  });
 }
 
-export function watchMyMoods(callback) {
-  const user = auth.currentUser
-  if (!user) return () => { }
-
-  const q = query(
-    collection(db, 'moods'),
-    where('uid', '==', user.uid),
-    orderBy('createdAt', 'desc')
-  )
-
-  return onSnapshot(q, (snapshot) => {
-    const moods = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
-    callback(moods)
-  })
-}
+// ✅ Delete mood from Firestore
 export async function deleteMood(id) {
-  const user = auth.currentUser
-  if (!user) return
-  return deleteDoc(doc(db, 'moods', id))
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not signed in');
+  return deleteDoc(doc(db, 'moods', id));
 }
 
-
-// ✅ WORKING: Helper function to get mood configuration
+// ✅ Helper function to get mood configuration (emojis, labels, colors)
 export function getMoodConfig(moodValue) {
   const moodOptions = [
     { value: 'amazing', emoji: '😄', label: 'Amazing', color: '#48bb78' },
@@ -50,7 +76,7 @@ export function getMoodConfig(moodValue) {
   return moodOptions.find(m => m.value === moodValue) || moodOptions[2]; // Default to 'okay'
 }
 
-// ✅ WORKING: Format timestamp nicely
+// ✅ Format timestamp nicely
 export function formatTimestamp(timestamp) {
   if (!timestamp) return 'Just now';
 
@@ -74,15 +100,3 @@ export function formatTimestamp(timestamp) {
     year: 'numeric'
   });
 }
-
-// TODO Phase 2: Swap this whole file from a mock writable to a Firestore-backed
-//   store. The new shape should:
-//     - subscribe to a query over the `moods` collection filtered by the
-//       current user's uid and ordered by timestamp desc
-//     - drive `moods` updates from onSnapshot()
-//     - implement addMood() with addDoc + serverTimestamp()
-//     - implement deleteMood() with deleteDoc()
-//   Keep the public API (`moods`, `addMood`, `deleteMood`, `getMoodConfig`,
-//   `formatTimestamp`) so the dashboard doesn't change. Verify: a second tab
-//   signed in as the same user picks up new moods live; a different user
-//   sees an isolated history.
