@@ -16,7 +16,7 @@
   },
   "type": "module",
   "engines": {
-    "node": "16.x"
+    "node": "24.x"
   },
   "glitch": {
     "projectType": "generated_static"
